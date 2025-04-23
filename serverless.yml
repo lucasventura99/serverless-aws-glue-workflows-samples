@@ -1,0 +1,121 @@
+service: sales-test-etl-workflow
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: sa-east-1
+  deploymentBucket:
+    name: sales-etl-workflow-deployment-bucket
+  iamRoleStatements:
+    - Effect: Allow
+      Action: '*'
+      Resource: '*'
+
+custom:
+  glueWorkflows:
+    salesETLWorkflow:
+      description: Simple Sales ETL Workflow with Multiple Steps
+      tags:
+        environment: production
+        project: sales-analytics
+      triggers:
+        - name: start-workflow-trigger
+          type: ON_DEMAND
+          enabled: true
+          description: "Manually start the workflow"
+          actions:
+            - crawlerName: sales-data-crawler
+      crawlers:
+        - name: sales-data-crawler
+          role: !GetAtt GlueServiceRole.Arn
+          databaseName: sales_database
+          targets:
+            S3Targets:
+              - Path: s3://sales-etl-workflow-deployment-bucket/raw-data/
+          schemaChangePolicy:
+            UpdateBehavior: UPDATE_IN_DATABASE
+            DeleteBehavior: DEPRECATE_IN_DATABASE
+          configuration: |
+            {
+              "Version": 1.0,
+              "CrawlerOutput": {
+                "Partitions": { "AddOrUpdateBehavior": "InheritFromTable" },
+                "Tables": { "AddOrUpdateBehavior": "MergeNewColumns" }
+              }
+            }
+      jobs:
+        - name: data-quality-check
+          role: !GetAtt GlueServiceRole.Arn
+          type: glueetl
+          scriptLocation: s3://sales-etl-workflow-deployment-bucket/scripts/data-quality.py
+          triggerType: CONDITIONAL
+          logical: AND
+          conditions:
+            - CrawlerName: sales-data-crawler
+              CrawlState: SUCCEEDED
+          workers: 1
+          workerType: Standard
+          timeout: 60
+          maxRetries: 1
+          arguments:
+            --source: s3://sales-etl-workflow-deployment-bucket/raw-data/
+            --target: s3://sales-etl-workflow-deployment-bucket/validated-data/
+            --database: sales_database
+            --table: sales_data
+            --quality-rules: s3://sales-etl-workflow-deployment-bucket/config/quality-rules.json
+        - name: transform-sales-data
+          role: !GetAtt GlueServiceRole.Arn
+          type: glueetl
+          scriptLocation: s3://sales-etl-workflow-deployment-bucket/scripts/transform.py
+          triggerType: CONDITIONAL
+          logical: AND
+          conditions:
+            - JobName: data-quality-check
+              State: SUCCEEDED
+          workers: 1
+          workerType: Standard
+          timeout: 60
+          maxRetries: 1
+          arguments:
+            --source: s3://sales-etl-workflow-deployment-bucket/validated-data/
+            --target: s3://sales-etl-workflow-deployment-bucket/transformed-data/
+            --database: sales_database
+            --table: transformed_sales
+        - name: aggregate-sales
+          role: !GetAtt GlueServiceRole.Arn
+          type: glueetl
+          scriptLocation: s3://sales-etl-workflow-deployment-bucket/scripts/aggregate.py
+          triggerType: CONDITIONAL
+          logical: AND
+          conditions:
+            - JobName: transform-sales-data
+              State: SUCCEEDED
+          workers: 1
+          workerType: Standard
+          timeout: 60
+          maxRetries: 1
+          arguments:
+            --source: s3://sales-etl-workflow-deployment-bucket/transformed-data/
+            --target: s3://sales-etl-workflow-deployment-bucket/aggregated-data/
+            --database: sales_database
+            --table: aggregated_sales
+
+plugins:
+  - serverless-aws-glue-workflows
+
+resources:
+  Resources:
+    GlueServiceRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: sales-test-etl-workflow-GlueServiceRole
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: glue.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+          - arn:aws:iam::aws:policy/AdministratorAccess

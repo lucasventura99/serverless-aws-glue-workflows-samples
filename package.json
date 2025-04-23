@@ -1,0 +1,22 @@
+{
+  "name": "glue-workflow-sample",
+  "version": "1.0.0",
+  "description": "Sample project demonstrating the usage of serverless-aws-glue-workflows plugin",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "aws",
+    "glue",
+    "serverless",
+    "etl",
+    "workflow"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "serverless": "^3.0.0",
+    "serverless-aws-glue-workflows": "^0.1.0"
+  }
+}
